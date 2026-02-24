@@ -58,7 +58,7 @@ def load_calendar_map(calendar_file: Path) -> dict[str, tuple[str, str, str]]:
 			event_type_2 = row.get("event_type_2", "")
 
 			event_name = event_name_1 if event_name_1 else event_name_2
-			event_type = event_type_1 if event_type_1 else event_type_2
+			event_type = event_type_1 if event_type_1 else event_type_2#losing some data here!!! TODO FIX. this
 			calendar_map[day_key] = (weekday, event_name, event_type)
 	return calendar_map
 
