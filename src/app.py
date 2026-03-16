@@ -219,6 +219,7 @@ def run_model(
 
 def main():
 	data_path = Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv"
+	max_rows = 50000
 	epochs = 8
 	batch_size = 2048
 	learning_rate = 1e-3
@@ -230,7 +231,7 @@ def main():
 	torch.manual_seed(42)
 	np.random.seed(42)
 
-	x_values, y_values = load_and_encode_data(data_path)
+	x_values, y_values = load_and_encode_data(data_path, max_rows=max_rows)
 	unique_labels = np.unique(y_values)
 	if unique_labels.size < 2:
 		raise ValueError("Target column 'isSale' has only one class in loaded rows.")
