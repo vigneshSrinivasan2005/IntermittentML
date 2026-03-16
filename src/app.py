@@ -109,24 +109,49 @@ def compute_metrics(y_true, y_pred):
 
 
 def load_and_encode_data(csv_path, max_rows=None):
-	feature_columns = ["Weekday", "Event Name", "Event Type", "dept Id", "store id"]
+	categorical_columns = [
+		"Weekday",
+		"Month",
+		"Event Name",
+		"Event Type",
+		"item Id",
+		"dept Id",
+		"store id",
+	]
+	numeric_columns = [
+		"Price Change Percentage 7d",
+		"Price Change Percentage 30d",
+		"Time Since Last Sale",
+		"3-Day Rolling Sales",
+		"7-Day Rolling Sales",
+		"28-Day Rolling Sales",
+	]
 	df = pd.read_csv(
 		csv_path,
-		usecols=feature_columns + ["isSale"],
+		usecols=categorical_columns + numeric_columns + ["isSale"],
 		nrows=max_rows,
 	)
 
-	for column in feature_columns:
+	for column in categorical_columns:
 		df[column] = df[column].fillna("None").astype(str)
+	for column in numeric_columns:
+		df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0).astype(np.float32)
 	df["isSale"] = df["isSale"].astype(np.float32)
 
 	encoded_features = pd.get_dummies(
-		df[feature_columns],
-		columns=feature_columns,
+		df[categorical_columns],
+		columns=categorical_columns,
 		dtype=np.int8,
 	)
+	numeric_features = df[numeric_columns]
 
-	x_values = encoded_features.to_numpy(dtype=np.int8)
+	x_values = np.concatenate(
+		[
+			encoded_features.to_numpy(dtype=np.float32),
+			numeric_features.to_numpy(dtype=np.float32),
+		],
+		axis=1,
+	)
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
 	return x_values, y_values
