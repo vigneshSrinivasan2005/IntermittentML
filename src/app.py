@@ -1,6 +1,5 @@
 from pathlib import Path
 import argparse
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,7 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 
 class IntermittentSalesMLP(nn.Module):
-	def __init__(self, input_dim: int, hidden_1: int = 64, hidden_2: int = 32) -> None:
+	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
 		super().__init__()
 		self.network = nn.Sequential(
 			nn.Linear(input_dim, hidden_1),
@@ -20,11 +19,27 @@ class IntermittentSalesMLP(nn.Module):
 			nn.Linear(hidden_2, 1),
 		)
 
-	def forward(self, features: torch.Tensor) -> torch.Tensor:
+	def forward(self, features):
 		return self.network(features)
 
 
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+def parse_args():
+	parser = argparse.ArgumentParser(description="Train a basic intermittent sales model")
+	parser.add_argument(
+		"--data",
+		type=Path,
+		default=Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv",
+		help="Path to intermittent_data.csv",
+	)
+	parser.add_argument("--max-rows", type=int, default=300000, help="Max rows to load for quick training")
+	parser.add_argument("--epochs", type=int, default=8, help="Training epochs")
+	parser.add_argument("--batch-size", type=int, default=2048, help="Batch size")
+	parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate")
+	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio")
+	return parser.parse_args()
+
+
+def compute_metrics(y_true, y_pred):
 	y_true = y_true.astype(np.int32)
 	y_pred = y_pred.astype(np.int32)
 
@@ -50,7 +65,7 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 	}
 
 
-def load_and_encode_data(csv_path: Path, max_rows: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+def load_and_encode_data(csv_path, max_rows=None):
 	df = pd.read_csv(
 		csv_path,
 		usecols=["Event Name", "Event Type", "isSale"],
@@ -73,32 +88,14 @@ def load_and_encode_data(csv_path: Path, max_rows: Optional[int] = None) -> Tupl
 	return x_values, y_values
 
 
-def main() -> None:
-	parser = argparse.ArgumentParser(description="Train a basic intermittent sales model")
-	parser.add_argument(
-		"--data",
-		type=Path,
-		default=Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv",
-		help="Path to intermittent_data.csv",
-	)
-	parser.add_argument("--max-rows", type=int, default=300000, help="Max rows to load for quick training")
-	parser.add_argument("--epochs", type=int, default=8, help="Training epochs")
-	parser.add_argument("--batch-size", type=int, default=2048, help="Batch size")
-	parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate")
-	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio")
-	args = parser.parse_args()
-
-	torch.manual_seed(42)
-	np.random.seed(42)
-
-	x_values, y_values = load_and_encode_data(args.data, args.max_rows)
-	unique_labels = np.unique(y_values)
-	if unique_labels.size < 2:
-		raise ValueError("Target column 'isSale' has only one class in loaded rows. Increase --max-rows.")
-
+def build_train_test_tensors(
+	x_values,
+	y_values,
+	test_size,
+):
 	num_rows = x_values.shape[0]
 	shuffled_indices = np.random.permutation(num_rows)
-	test_count = int(num_rows * args.test_size)
+	test_count = int(num_rows * test_size)
 
 	test_indices = shuffled_indices[:test_count]
 	train_indices = shuffled_indices[test_count:]
@@ -108,23 +105,25 @@ def main() -> None:
 	x_test = torch.tensor(x_values[test_indices], dtype=torch.float32)
 	y_test = torch.tensor(y_values[test_indices], dtype=torch.float32).unsqueeze(1)
 
-	train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
+	return x_train, y_train, x_test, y_test
 
+
+def get_device():
 	if torch.backends.mps.is_available():
-		device = torch.device("mps")
-	else:
-		device = torch.device("cpu")
+		return torch.device("mps")
+	return torch.device("cpu")
 
-	model = IntermittentSalesMLP(input_dim=x_train.shape[1]).to(device)
-	optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-	criterion = nn.BCEWithLogitsLoss()
 
-	print(f"Loaded rows: {num_rows}")
-	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
-	print(f"Using device: {device}")
-
+def train_model(
+	model,
+	train_loader,
+	optimizer,
+	criterion,
+	device,
+	epochs,
+):
 	model.train()
-	for epoch in range(1, args.epochs + 1):
+	for epoch in range(1, epochs + 1):
 		epoch_loss = 0.0
 		for batch_features, batch_target in train_loader:
 			batch_features = batch_features.to(device)
@@ -139,13 +138,45 @@ def main() -> None:
 			epoch_loss += loss.item() * batch_features.size(0)
 
 		avg_loss = epoch_loss / max(len(train_loader.dataset), 1)
-		print(f"Epoch {epoch:02d}/{args.epochs} - loss: {avg_loss:.5f}")
+		print(f"Epoch {epoch:02d}/{epochs} - loss: {avg_loss:.5f}")
 
+
+def evaluate_model(model, x_test, device):
 	model.eval()
 	with torch.no_grad():
 		logits = model(x_test.to(device)).cpu().squeeze(1).numpy()
 		probabilities = 1.0 / (1.0 + np.exp(-logits))
-		predictions = (probabilities >= 0.5).astype(np.int32)
+		return (probabilities >= 0.5).astype(np.int32)
+
+
+def main():
+	args = parse_args()
+
+	torch.manual_seed(42)
+	np.random.seed(42)
+
+	x_values, y_values = load_and_encode_data(args.data, args.max_rows)
+	unique_labels = np.unique(y_values)
+	if unique_labels.size < 2:
+		raise ValueError("Target column 'isSale' has only one class in loaded rows. Increase --max-rows.")
+
+	x_train, y_train, x_test, y_test = build_train_test_tensors(x_values, y_values, args.test_size)
+
+	train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
+
+	device = get_device()
+
+	model = IntermittentSalesMLP(input_dim=x_train.shape[1]).to(device)
+	optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+	criterion = nn.BCEWithLogitsLoss()
+
+	num_rows = x_values.shape[0]
+	print(f"Loaded rows: {num_rows}")
+	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
+	print(f"Using device: {device}")
+
+	train_model(model, train_loader, optimizer, criterion, device, args.epochs)
+	predictions = evaluate_model(model, x_test, device)
 
 	metrics = compute_metrics(y_test.squeeze(1).numpy(), predictions)
 	print("\nEvaluation on test set")
