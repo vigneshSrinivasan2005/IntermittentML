@@ -1,5 +1,6 @@
 from pathlib import Path
 from abc import ABC, abstractmethod
+import json
 
 import numpy as np
 import pandas as pd
@@ -203,10 +204,26 @@ def encode_features(df, categorical_columns, numeric_columns, encoded_columns=No
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
 	return x_values_by_mode, y_values, encoded_columns, numeric_stats
+
+
 def get_device():
 	if torch.backends.mps.is_available():
 		return torch.device("mps")
 	return torch.device("cpu")
+
+
+def evaluate_split(model, x_data, y_data, device, threshold=0.5):
+	model.eval()
+	with torch.no_grad():
+		x_device = x_data.to(device)
+		y_device = y_data.to(device)
+		logits = model(x_device)
+		loss = float(model.compute_loss(logits, y_device).item())
+		probabilities = torch.sigmoid(logits.squeeze(1)).cpu().numpy()
+		predictions = (probabilities >= threshold).astype(np.int32)
+
+	metrics = compute_metrics(y_data.squeeze(1).cpu().numpy(), predictions)
+	return metrics, loss
 
 
 def train_model(
@@ -215,7 +232,12 @@ def train_model(
 	optimizer,
 	device,
 	epochs,
+	x_train,
+	y_train,
+	x_validate,
+	y_validate,
 ):
+	history_rows = []
 	model.train()
 	for epoch in range(1, epochs + 1):
 		epoch_loss = 0.0
@@ -232,7 +254,33 @@ def train_model(
 			epoch_loss += loss.item() * batch_features.size(0)
 
 		avg_loss = epoch_loss / max(len(train_loader.dataset), 1)
-		print(f"Epoch {epoch:02d}/{epochs} - loss: {avg_loss:.5f}")
+		train_metrics, train_eval_loss = evaluate_split(model, x_train, y_train, device)
+		validate_metrics, validate_loss = evaluate_split(model, x_validate, y_validate, device)
+
+		history_rows.append(
+			{
+				"epoch": epoch,
+				"train_loss": avg_loss,
+				"train_eval_loss": train_eval_loss,
+				"validate_loss": validate_loss,
+				"train_accuracy": train_metrics["accuracy"],
+				"validate_accuracy": validate_metrics["accuracy"],
+				"train_precision": train_metrics["precision"],
+				"validate_precision": validate_metrics["precision"],
+				"train_recall": train_metrics["recall"],
+				"validate_recall": validate_metrics["recall"],
+				"train_f1": train_metrics["f1"],
+				"validate_f1": validate_metrics["f1"],
+			}
+		)
+
+		print(
+			f"Epoch {epoch:02d}/{epochs} - loss: {avg_loss:.5f} "
+			f"train_acc: {train_metrics['accuracy']:.4f} val_acc: {validate_metrics['accuracy']:.4f} "
+			f"val_f1: {validate_metrics['f1']:.4f}"
+		)
+
+	return history_rows
 
 
 def evaluate_model(model, x_test, device):
@@ -241,15 +289,50 @@ def evaluate_model(model, x_test, device):
 	return predictions.cpu().numpy().astype(np.int32)
 
 
+def save_model_logs(model_name, numeric_mode, epoch_history, validate_metrics, evaluate_metrics, output_dir):
+	log_dir = output_dir / "model_logs"
+	log_dir.mkdir(parents=True, exist_ok=True)
+
+	epoch_metrics_path = log_dir / f"{model_name}_epoch_metrics.csv"
+	pd.DataFrame(epoch_history).to_csv(epoch_metrics_path, index=False)
+
+	epoch_df = pd.DataFrame(epoch_history)
+	best_epoch_index = int(epoch_df["validate_f1"].idxmax())
+	best_epoch = int(epoch_df.iloc[best_epoch_index]["epoch"])
+
+	summary = {
+		"model_name": model_name,
+		"numeric_mode": numeric_mode,
+		"best_validate_f1_epoch": best_epoch,
+		"best_validate_f1": float(epoch_df["validate_f1"].max()),
+		"final_epoch": int(epoch_df.iloc[-1]["epoch"]),
+		"final_train_accuracy": float(epoch_df.iloc[-1]["train_accuracy"]),
+		"final_validate_accuracy": float(epoch_df.iloc[-1]["validate_accuracy"]),
+		"final_train_f1": float(epoch_df.iloc[-1]["train_f1"]),
+		"final_validate_f1": float(epoch_df.iloc[-1]["validate_f1"]),
+		"final_validate_metrics": validate_metrics,
+		"final_evaluate_metrics": evaluate_metrics,
+	}
+
+	summary_path = log_dir / f"{model_name}_summary.json"
+	with summary_path.open("w", encoding="utf-8") as summary_file:
+		json.dump(summary, summary_file, indent=2)
+
+	print(f"Saved model logs -> {epoch_metrics_path}")
+	print(f"Saved model summary -> {summary_path}")
+
+
 def run_model(
 	model_name,
 	model,
+	numeric_mode,
 	x_train,
 	y_train,
 	x_validate,
 	y_validate,
 	x_evaluate,
 	y_evaluate,
+	output_dir,
 	device,
 	epochs,
 	batch_size,
@@ -262,12 +345,20 @@ def run_model(
 	optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 	print(f"\nRunning model: {model_name}")
-	train_model(model, train_loader, optimizer, device, epochs)
-	validate_predictions = evaluate_model(model, x_validate, device)
-	evaluate_predictions = evaluate_model(model, x_evaluate, device)
-
-	validate_metrics = compute_metrics(y_validate.squeeze(1).numpy(), validate_predictions)
-	evaluate_metrics = compute_metrics(y_evaluate.squeeze(1).numpy(), evaluate_predictions)
+	epoch_history = train_model(
+		model,
+		train_loader,
+		optimizer,
+		device,
+		epochs,
+		x_train,
+		y_train,
+		x_validate,
+		y_validate,
+	)
+	validate_metrics, _ = evaluate_split(model, x_validate, y_validate, device)
+	evaluate_metrics_values, _ = evaluate_split(model, x_evaluate, y_evaluate, device)
+	evaluate_metrics = evaluate_metrics_values
 
 	print("Validation metrics")
 	print(f"Accuracy : {validate_metrics['accuracy']:.4f}")
@@ -277,11 +368,20 @@ def run_model(
 	print(f"Confusion Matrix -> TP: {validate_metrics['tp']} TN: {validate_metrics['tn']} FP: {validate_metrics['fp']} FN: {validate_metrics['fn']}")
 
 	print("Evaluation metrics")
-	print(f"Accuracy : {evaluate_metrics['accuracy']:.4f}")
-	print(f"Precision: {evaluate_metrics['precision']:.4f}")
-	print(f"Recall   : {evaluate_metrics['recall']:.4f}")
-	print(f"F1 Score : {evaluate_metrics['f1']:.4f}")
-	print(f"Confusion Matrix -> TP: {evaluate_metrics['tp']} TN: {evaluate_metrics['tn']} FP: {evaluate_metrics['fp']} FN: {evaluate_metrics['fn']}")
+	print(f"Accuracy : {evaluate_metrics_values['accuracy']:.4f}")
+	print(f"Precision: {evaluate_metrics_values['precision']:.4f}")
+	print(f"Recall   : {evaluate_metrics_values['recall']:.4f}")
+	print(f"F1 Score : {evaluate_metrics_values['f1']:.4f}")
+	print(f"Confusion Matrix -> TP: {evaluate_metrics_values['tp']} TN: {evaluate_metrics_values['tn']} FP: {evaluate_metrics_values['fp']} FN: {evaluate_metrics_values['fn']}")
+
+	save_model_logs(
+		model_name=model_name,
+		numeric_mode=numeric_mode,
+		epoch_history=epoch_history,
+		validate_metrics=validate_metrics,
+		evaluate_metrics=evaluate_metrics,
+		output_dir=output_dir,
+	)
 
 
 def main():
@@ -371,12 +471,14 @@ def main():
 	run_model(
 		model_name="weighted_mlp",
 		model=weighted_model,
+		numeric_mode=weighted_numeric_mode,
 		x_train=x_train,
 		y_train=y_train,
 		x_validate=x_validate,
 		y_validate=y_validate,
 		x_evaluate=x_evaluate,
 		y_evaluate=y_evaluate,
+		output_dir=output_dir,
 		device=device,
 		epochs=epochs,
 		batch_size=batch_size,
@@ -393,12 +495,14 @@ def main():
 	run_model(
 		model_name="wape_mlp",
 		model=wape_model,
+		numeric_mode=wape_numeric_mode,
 		x_train=x_train,
 		y_train=y_train,
 		x_validate=x_validate,
 		y_validate=y_validate,
 		x_evaluate=x_evaluate,
 		y_evaluate=y_evaluate,
+		output_dir=output_dir,
 		device=device,
 		epochs=epochs,
 		batch_size=batch_size,
