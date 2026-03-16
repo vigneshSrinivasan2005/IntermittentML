@@ -31,11 +31,10 @@ def parse_args():
 		default=Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv",
 		help="Path to intermittent_data.csv",
 	)
-	parser.add_argument("--max-rows", type=int, default=300000, help="Max rows to load for quick training")
 	parser.add_argument("--epochs", type=int, default=8, help="Training epochs")
 	parser.add_argument("--batch-size", type=int, default=2048, help="Batch size")
 	parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate")
-	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio")
+	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio") #80 -20 test train split
 	return parser.parse_args()
 
 
@@ -155,7 +154,7 @@ def main():
 	torch.manual_seed(42)
 	np.random.seed(42)
 
-	x_values, y_values = load_and_encode_data(args.data, args.max_rows)
+	x_values, y_values = load_and_encode_data(args.data)
 	unique_labels = np.unique(y_values)
 	if unique_labels.size < 2:
 		raise ValueError("Target column 'isSale' has only one class in loaded rows. Increase --max-rows.")
