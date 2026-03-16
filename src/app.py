@@ -1,25 +1,15 @@
 from pathlib import Path
-import argparse
 from abc import ABC, abstractmethod
 
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 
 class BaseModel(nn.Module, ABC):
-	@classmethod
-	@abstractmethod
-	def add_model_args(cls, parser):
-		pass
-
-	@classmethod
-	@abstractmethod
-	def from_args(cls, args, input_dim):
-		pass
-
 	@abstractmethod
 	def forward(self, features):
 		pass
@@ -42,15 +32,6 @@ class BaseModel(nn.Module, ABC):
 
 
 class IntermittentSalesMLP(BaseModel):
-	@classmethod
-	def add_model_args(cls, parser):
-		parser.add_argument("--hidden-1", type=int, default=64, help="First hidden layer size")
-		parser.add_argument("--hidden-2", type=int, default=32, help="Second hidden layer size")
-
-	@classmethod
-	def from_args(cls, args, input_dim):
-		return cls(input_dim=input_dim, hidden_1=args.hidden_1, hidden_2=args.hidden_2)
-
 	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
 		super().__init__()
 		self.network = nn.Sequential(
@@ -86,20 +67,19 @@ class IntermittentSalesMLP(BaseModel):
 		return (probabilities >= threshold).to(dtype=torch.int32)
 
 
-def parse_args(model_class):
-	parser = argparse.ArgumentParser(description="Train a basic intermittent sales model")
-	parser.add_argument(
-		"--data",
-		type=Path,
-		default=Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv",
-		help="Path to intermittent_data.csv",
-	)
-	parser.add_argument("--epochs", type=int, default=8, help="Training epochs")
-	parser.add_argument("--batch-size", type=int, default=2048, help="Batch size")
-	parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate")
-	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio")
-	model_class.add_model_args(parser)
-	return parser.parse_args()
+class WeightedIntermittentSalesMLP(IntermittentSalesMLP):
+	def __init__(self, input_dim, hidden_1=64, hidden_2=32, pos_weight=2.0):
+		super().__init__(input_dim=input_dim, hidden_1=hidden_1, hidden_2=hidden_2)
+		self.register_buffer("pos_weight", torch.tensor([float(pos_weight)], dtype=torch.float32))
+
+	def compute_loss(self, logits, targets):
+		return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=self.pos_weight)
+
+
+MODEL_REGISTRY = {
+	"mlp": IntermittentSalesMLP,
+	"weighted_mlp": WeightedIntermittentSalesMLP,
+}
 
 
 def compute_metrics(y_true, y_pred):
@@ -209,42 +189,93 @@ def evaluate_model(model, x_test, device):
 	return predictions.cpu().numpy().astype(np.int32)
 
 
+def run_model(
+	model_name,
+	model,
+	x_train,
+	y_train,
+	x_test,
+	y_test,
+	device,
+	epochs,
+	batch_size,
+	learning_rate,
+):
+	train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
+	optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+	print(f"\nRunning model: {model_name}")
+	train_model(model, train_loader, optimizer, device, epochs)
+	predictions = evaluate_model(model, x_test, device)
+
+	metrics = compute_metrics(y_test.squeeze(1).numpy(), predictions)
+	print("Evaluation on test set")
+	print(f"Accuracy : {metrics['accuracy']:.4f}")
+	print(f"Precision: {metrics['precision']:.4f}")
+	print(f"Recall   : {metrics['recall']:.4f}")
+	print(f"F1 Score : {metrics['f1']:.4f}")
+	print(f"Confusion Matrix -> TP: {metrics['tp']} TN: {metrics['tn']} FP: {metrics['fp']} FN: {metrics['fn']}")
+
+
 def main():
-	model_class = IntermittentSalesMLP
-	args = parse_args(model_class)
+	data_path = Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv"
+	epochs = 8
+	batch_size = 2048
+	learning_rate = 1e-3
+	test_size = 0.2
+	hidden_1 = 64
+	hidden_2 = 32
+	pos_weight = 2.0
 
 	torch.manual_seed(42)
 	np.random.seed(42)
 
-	x_values, y_values = load_and_encode_data(args.data)
+	x_values, y_values = load_and_encode_data(data_path)
 	unique_labels = np.unique(y_values)
 	if unique_labels.size < 2:
 		raise ValueError("Target column 'isSale' has only one class in loaded rows.")
 
-	x_train, y_train, x_test, y_test = build_train_test_tensors(x_values, y_values, args.test_size)
-
-	train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=args.batch_size, shuffle=True)
+	x_train, y_train, x_test, y_test = build_train_test_tensors(x_values, y_values, test_size)
 
 	device = get_device()
-
-	model = model_class.from_args(args, input_dim=x_train.shape[1]).to(device)
-	optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
 	num_rows = x_values.shape[0]
 	print(f"Loaded rows: {num_rows}")
 	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
 	print(f"Using device: {device}")
 
-	train_model(model, train_loader, optimizer, device, args.epochs)
-	predictions = evaluate_model(model, x_test, device)
+	mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
+	run_model(
+		model_name="mlp",
+		model=mlp_model,
+		x_train=x_train,
+		y_train=y_train,
+		x_test=x_test,
+		y_test=y_test,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
 
-	metrics = compute_metrics(y_test.squeeze(1).numpy(), predictions)
-	print("\nEvaluation on test set")
-	print(f"Accuracy : {metrics['accuracy']:.4f}")
-	print(f"Precision: {metrics['precision']:.4f}")
-	print(f"Recall   : {metrics['recall']:.4f}")
-	print(f"F1 Score : {metrics['f1']:.4f}")
-	print(f"Confusion Matrix -> TP: {metrics['tp']} TN: {metrics['tn']} FP: {metrics['fp']} FN: {metrics['fn']}")
+	weighted_model = WeightedIntermittentSalesMLP(
+		input_dim=x_train.shape[1],
+		hidden_1=hidden_1,
+		hidden_2=hidden_2,
+		pos_weight=pos_weight,
+	).to(device)
+	run_model(
+		model_name="weighted_mlp",
+		model=weighted_model,
+		x_train=x_train,
+		y_train=y_train,
+		x_test=x_test,
+		y_test=y_test,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
 
 
 if __name__ == "__main__":
