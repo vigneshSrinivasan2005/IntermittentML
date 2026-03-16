@@ -1,5 +1,6 @@
 from pathlib import Path
 import argparse
+from abc import ABC, abstractmethod
 
 import numpy as np
 import pandas as pd
@@ -8,7 +9,29 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 
-class IntermittentSalesMLP(nn.Module):
+class BaseModel(nn.Module, ABC):
+	@abstractmethod
+	def forward(self, features):
+		pass
+
+	@abstractmethod
+	def compute_loss(self, logits, targets):
+		pass
+
+	@abstractmethod
+	def initialize_weights(self):
+		pass
+
+	@abstractmethod
+	def predict_proba(self, features):
+		pass
+
+	@abstractmethod
+	def predict(self, features, threshold=0.5):
+		pass
+
+
+class IntermittentSalesMLP(BaseModel):
 	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
 		super().__init__()
 		self.network = nn.Sequential(
@@ -19,12 +42,29 @@ class IntermittentSalesMLP(nn.Module):
 			nn.Linear(hidden_2, 1),
 		)
 		self.loss_fn = nn.BCEWithLogitsLoss()
+		self.initialize_weights()
 
 	def forward(self, features):
 		return self.network(features)
 
 	def compute_loss(self, logits, targets):
 		return self.loss_fn(logits, targets)
+
+	def initialize_weights(self):
+		for layer in self.network:
+			if isinstance(layer, nn.Linear):
+				nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu") # He initialization
+				if layer.bias is not None:
+					nn.init.zeros_(layer.bias)
+
+	def predict_proba(self, features):
+		with torch.no_grad():
+			logits = self(features).squeeze(1)
+			return torch.sigmoid(logits)
+
+	def predict(self, features, threshold=0.5):
+		probabilities = self.predict_proba(features)
+		return (probabilities >= threshold).to(dtype=torch.int32)
 
 
 def parse_args():
@@ -145,10 +185,8 @@ def train_model(
 
 def evaluate_model(model, x_test, device):
 	model.eval()
-	with torch.no_grad():
-		logits = model(x_test.to(device)).cpu().squeeze(1).numpy()
-		probabilities = 1.0 / (1.0 + np.exp(-logits))
-		return (probabilities >= 0.5).astype(np.int32)
+	predictions = model.predict(x_test.to(device))
+	return predictions.cpu().numpy().astype(np.int32)
 
 
 def main():
