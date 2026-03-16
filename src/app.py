@@ -18,9 +18,13 @@ class IntermittentSalesMLP(nn.Module):
 			nn.ReLU(),
 			nn.Linear(hidden_2, 1),
 		)
+		self.loss_fn = nn.BCEWithLogitsLoss()
 
 	def forward(self, features):
 		return self.network(features)
+
+	def compute_loss(self, logits, targets):
+		return self.loss_fn(logits, targets)
 
 
 def parse_args():
@@ -79,7 +83,7 @@ def load_and_encode_data(csv_path, max_rows=None):
 		df[["Event Name", "Event Type"]],
 		columns=["Event Name", "Event Type"],
 		dtype=np.float32,
-	)
+	)# one hot encoding
 
 	x_values = encoded_features.to_numpy(dtype=np.float32)
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
@@ -117,7 +121,6 @@ def train_model(
 	model,
 	train_loader,
 	optimizer,
-	criterion,
 	device,
 	epochs,
 ):
@@ -130,7 +133,7 @@ def train_model(
 
 			optimizer.zero_grad()
 			logits = model(batch_features)
-			loss = criterion(logits, batch_target)
+			loss = model.compute_loss(logits, batch_target)
 			loss.backward()
 			optimizer.step()
 
@@ -157,7 +160,7 @@ def main():
 	x_values, y_values = load_and_encode_data(args.data)
 	unique_labels = np.unique(y_values)
 	if unique_labels.size < 2:
-		raise ValueError("Target column 'isSale' has only one class in loaded rows. Increase --max-rows.")
+		raise ValueError("Target column 'isSale' has only one class in loaded rows.")
 
 	x_train, y_train, x_test, y_test = build_train_test_tensors(x_values, y_values, args.test_size)
 
@@ -167,14 +170,13 @@ def main():
 
 	model = IntermittentSalesMLP(input_dim=x_train.shape[1]).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-	criterion = nn.BCEWithLogitsLoss()
 
 	num_rows = x_values.shape[0]
 	print(f"Loaded rows: {num_rows}")
 	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
 	print(f"Using device: {device}")
 
-	train_model(model, train_loader, optimizer, criterion, device, args.epochs)
+	train_model(model, train_loader, optimizer, device, args.epochs)
 	predictions = evaluate_model(model, x_test, device)
 
 	metrics = compute_metrics(y_test.squeeze(1).numpy(), predictions)
