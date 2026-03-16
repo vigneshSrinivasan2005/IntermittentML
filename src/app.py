@@ -182,28 +182,27 @@ def encode_features(df, categorical_columns, numeric_columns, encoded_columns=No
 	else:
 		encoded_features = encoded_features.reindex(columns=encoded_columns, fill_value=0)
 
-	numeric_features = df[numeric_columns].copy()
+	raw_numeric_features = df[numeric_columns].copy()
 	if numeric_stats is None:
-		numeric_mean = numeric_features.mean()
-		numeric_std = numeric_features.std().replace(0, 1.0)
+		numeric_mean = raw_numeric_features.mean()
+		numeric_std = raw_numeric_features.std().replace(0, 1.0)
 		numeric_stats = (numeric_mean, numeric_std)
 	else:
 		numeric_mean, numeric_std = numeric_stats
 
-	numeric_features = (numeric_features - numeric_mean) / numeric_std
+	normalized_numeric_features = (raw_numeric_features - numeric_mean) / numeric_std
+	encoded_array = encoded_features.to_numpy(dtype=np.float32)
+	raw_numeric_array = raw_numeric_features.to_numpy(dtype=np.float32)
+	normalized_numeric_array = normalized_numeric_features.to_numpy(dtype=np.float32)
 
-	x_values = np.concatenate(
-		[
-			encoded_features.to_numpy(dtype=np.float32),
-			numeric_features.to_numpy(dtype=np.float32),
-		],
-		axis=1,
-	)
+	x_values_by_mode = {
+		"normalized": np.concatenate([encoded_array, normalized_numeric_array], axis=1),
+		"non_normalized": np.concatenate([encoded_array, raw_numeric_array], axis=1),
+		"both": np.concatenate([encoded_array, raw_numeric_array, normalized_numeric_array], axis=1),
+	}
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
-	return x_values, y_values, encoded_columns, numeric_stats
-
-
+	return x_values_by_mode, y_values, encoded_columns, numeric_stats
 def get_device():
 	if torch.backends.mps.is_available():
 		return torch.device("mps")
@@ -238,7 +237,7 @@ def train_model(
 
 def evaluate_model(model, x_test, device):
 	model.eval()
-	predictions = model.predict(x_test.to(device))
+	predictions = model.predict(x_test.to(device), threshold=0.5)
 	return predictions.cpu().numpy().astype(np.int32)
 
 
@@ -291,11 +290,12 @@ def main():
 	validate_data_path = output_dir / "intermittent_validate_data.csv"
 	evaluate_data_path = output_dir / "intermittent_evaluate_data.csv"
 	max_rows = 1000000
-	epochs = 10
+	epochs = 30
 	batch_size = 2048
 	learning_rate = 1e-3
 	hidden_1 = 64
 	hidden_2 = 32
+	pos_weight = 2.0
 
 	torch.manual_seed(42)
 	np.random.seed(42)
@@ -305,19 +305,19 @@ def main():
 	validate_df = load_dataset_frame(validate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
 	evaluate_df = load_dataset_frame(evaluate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
 
-	x_train_values, y_train_values, encoded_columns, numeric_stats = encode_features(
+	x_train_by_mode, y_train_values, encoded_columns, numeric_stats = encode_features(
 		train_df,
 		categorical_columns,
 		numeric_columns,
 	)
-	x_validate_values, y_validate_values, _, _ = encode_features(
+	x_validate_by_mode, y_validate_values, _, _ = encode_features(
 		validate_df,
 		categorical_columns,
 		numeric_columns,
 		encoded_columns,
 		numeric_stats,
 	)
-	x_evaluate_values, y_evaluate_values, _, _ = encode_features(
+	x_evaluate_by_mode, y_evaluate_values, _, _ = encode_features(
 		evaluate_df,
 		categorical_columns,
 		numeric_columns,
@@ -329,44 +329,21 @@ def main():
 	if unique_labels.size < 2:
 		raise ValueError("Target column 'isSale' has only one class in train rows.")
 
-	x_train = torch.tensor(x_train_values, dtype=torch.float32)
+	device = get_device()
 	y_train = torch.tensor(y_train_values, dtype=torch.float32).unsqueeze(1)
-	x_validate = torch.tensor(x_validate_values, dtype=torch.float32)
 	y_validate = torch.tensor(y_validate_values, dtype=torch.float32).unsqueeze(1)
-	x_evaluate = torch.tensor(x_evaluate_values, dtype=torch.float32)
 	y_evaluate = torch.tensor(y_evaluate_values, dtype=torch.float32).unsqueeze(1)
 
-	device = get_device()
-
-	print(f"Train rows loaded: {len(x_train)}")
-	print(f"Validate rows loaded: {len(x_validate)}")
-	print(f"Evaluate rows loaded: {len(x_evaluate)}")
-	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
+	print(f"Train rows loaded: {len(y_train)}")
+	print(f"Validate rows loaded: {len(y_validate)}")
+	print(f"Evaluate rows loaded: {len(y_evaluate)}")
+	print(f"Available numeric feature modes: {', '.join(sorted(x_train_by_mode.keys()))}")
 	print(f"Using device: {device}")
 
-	#mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
-	#run_model(
-	#	model_name="mlp",
-	#	model=mlp_model,
-	#	x_train=x_train,
-	#	y_train=y_train,
-	#	x_test=x_test,
-	#	y_test=y_test,
-	#	device=device,
-	#	epochs=epochs,
-	#	batch_size=batch_size,
-	#	learning_rate=learning_rate,
-	#)
-
-	# weighted_model = WeightedIntermittentSalesMLP(
-	# 	input_dim=x_train.shape[1],
-	# 	hidden_1=hidden_1,
-	# 	hidden_2=hidden_2,
-	# 	pos_weight=pos_weight,
-	# ).to(device)
+	# mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
 	# run_model(
-	# 	model_name="weighted_mlp",
-	# 	model=weighted_model,
+	# 	model_name="mlp",
+	# 	model=mlp_model,
 	# 	x_train=x_train,
 	# 	y_train=y_train,
 	# 	x_validate=x_validate,
@@ -378,30 +355,22 @@ def main():
 	# 	batch_size=batch_size,
 	# 	learning_rate=learning_rate,
 	# )
-	# wape_model = WAPEIntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
-	# run_model(
-	# 	model_name="wape_mlp",
-	# 	model=wape_model,
-	# 	x_train=x_train,	
-	# 	y_train=y_train,
-	# 	x_validate=x_validate,
-	# 	y_validate=y_validate,	
-	# 	x_evaluate=x_evaluate,	
-	# 	y_evaluate=y_evaluate,
-	# 	device=device,
-	# 	epochs=epochs,
-	# 	batch_size=batch_size,
-	# 	learning_rate=learning_rate,
-	# )
 
-	dynamic_weighted_model = DynamicWeightedIntermittentSalesMLP(
+	weighted_numeric_mode = "normalized"
+	x_train = torch.tensor(x_train_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	x_validate = torch.tensor(x_validate_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	x_evaluate = torch.tensor(x_evaluate_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	print(f"Preparing model 'weighted_mlp' with numeric_mode='{weighted_numeric_mode}' (feature_dim={x_train.shape[1]})")
+
+	weighted_model = WeightedIntermittentSalesMLP(
 		input_dim=x_train.shape[1],
 		hidden_1=hidden_1,
 		hidden_2=hidden_2,
+		pos_weight=pos_weight,
 	).to(device)
 	run_model(
-		model_name="dynamic_weighted_mlp",
-		model=dynamic_weighted_model,
+		model_name="weighted_mlp",
+		model=weighted_model,
 		x_train=x_train,
 		y_train=y_train,
 		x_validate=x_validate,
@@ -413,6 +382,48 @@ def main():
 		batch_size=batch_size,
 		learning_rate=learning_rate,
 	)
+
+	wape_numeric_mode = "non_normalized"
+	x_train = torch.tensor(x_train_by_mode[wape_numeric_mode], dtype=torch.float32)
+	x_validate = torch.tensor(x_validate_by_mode[wape_numeric_mode], dtype=torch.float32)
+	x_evaluate = torch.tensor(x_evaluate_by_mode[wape_numeric_mode], dtype=torch.float32)
+	print(f"Preparing model 'wape_mlp' with numeric_mode='{wape_numeric_mode}' (feature_dim={x_train.shape[1]})")
+
+	wape_model = WAPEIntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
+	run_model(
+		model_name="wape_mlp",
+		model=wape_model,
+		x_train=x_train,
+		y_train=y_train,
+		x_validate=x_validate,
+		y_validate=y_validate,
+		x_evaluate=x_evaluate,
+		y_evaluate=y_evaluate,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
+
+	# dynamic_weighted_model = DynamicWeightedIntermittentSalesMLP(
+	# 	input_dim=x_train.shape[1],
+	# 	hidden_1=hidden_1,
+	# 	hidden_2=hidden_2,
+	# ).to(device)
+	# run_model(
+	# 	model_name="dynamic_weighted_mlp",
+	# 	model=dynamic_weighted_model,
+	# 	x_train=x_train,
+	# 	y_train=y_train,
+	# 	x_validate=x_validate,
+	# 	y_validate=y_validate,
+	# 	x_evaluate=x_evaluate,
+	# 	y_evaluate=y_evaluate,
+	# 	device=device,
+	# 	epochs=epochs,
+	# 	batch_size=batch_size,
+	# 	learning_rate=learning_rate,
+	# )
 
 if __name__ == "__main__":
 	main()
