@@ -9,13 +9,13 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Identify intermittent products and export calendar-enriched sales rows"
+		description="Identify intermittent products and export split calendar-enriched sales rows"
 	)
 	project_root = Path(__file__).resolve().parents[1]
 	parser.add_argument(
 		"--sales-file",
 		type=Path,
-		default=project_root / "data" / "sales_train_validation.csv",
+		default=project_root / "data" / "sales_train_evaluation.csv",
 		help="Path to sales training CSV",
 	)
 	parser.add_argument(
@@ -31,10 +31,22 @@ def parse_args() -> argparse.Namespace:
 		help="Path to sell prices CSV",
 	)
 	parser.add_argument(
-		"--output-file",
+		"--train-output-file",
 		type=Path,
-		default=project_root / "outputs" / "intermittent_data.csv",
-		help="Path for output CSV",
+		default=project_root / "outputs" / "intermittent_train_data.csv",
+		help="Path for train output CSV",
+	)
+	parser.add_argument(
+		"--validate-output-file",
+		type=Path,
+		default=project_root / "outputs" / "intermittent_validate_data.csv",
+		help="Path for validation output CSV",
+	)
+	parser.add_argument(
+		"--evaluate-output-file",
+		type=Path,
+		default=project_root / "outputs" / "intermittent_evaluate_data.csv",
+		help="Path for evaluation output CSV",
 	)
 	parser.add_argument(
 		"--adi-threshold",
@@ -180,6 +192,17 @@ def compute_rolling_sales(daily_sales: list[int], window_size: int) -> list[int]
 	return rolling_sales
 
 
+def get_output_split(day_label: str) -> str | None:
+	day_number = int(day_label.split("_")[1])
+	if 1 <= day_number <= 1885:
+		return "train"
+	if 1886 <= day_number <= 1913:
+		return "validate"
+	if 1914 <= day_number <= 1941:
+		return "evaluate"
+	return None
+
+
 def main() -> None:
 	args = parse_args()
 
@@ -190,16 +213,20 @@ def main() -> None:
 	if not args.prices_file.exists():
 		raise FileNotFoundError(f"Prices file not found: {args.prices_file}")
 
-	args.output_file.parent.mkdir(parents=True, exist_ok=True)
+	args.train_output_file.parent.mkdir(parents=True, exist_ok=True)
+	args.validate_output_file.parent.mkdir(parents=True, exist_ok=True)
+	args.evaluate_output_file.parent.mkdir(parents=True, exist_ok=True)
 	calendar_map = load_calendar_map(args.calendar_file)
 	price_map = load_price_map(args.prices_file)
 
 	processed_items = 0
 	intermittent_items = 0
-	output_rows = 0
+	output_rows = {"train": 0, "validate": 0, "evaluate": 0}
 
 	with args.sales_file.open("r", newline="", encoding="utf-8") as sales_handle, \
-		args.output_file.open("w", newline="", encoding="utf-8") as out_handle:
+		args.train_output_file.open("w", newline="", encoding="utf-8") as train_handle, \
+		args.validate_output_file.open("w", newline="", encoding="utf-8") as validate_handle, \
+		args.evaluate_output_file.open("w", newline="", encoding="utf-8") as evaluate_handle:
 		reader = csv.reader(sales_handle)
 		header = next(reader, [])
 
@@ -209,8 +236,12 @@ def main() -> None:
 		day_indices = [index for index, name in enumerate(header) if name.startswith("d_")]
 		day_labels = [header[index] for index in day_indices]
 
-		writer = csv.writer(out_handle)
-		writer.writerow([
+		writers = {
+			"train": csv.writer(train_handle),
+			"validate": csv.writer(validate_handle),
+			"evaluate": csv.writer(evaluate_handle),
+		}
+		header_row = [
 			"Weekday",
 			"Month",
 			"Event Name",
@@ -225,7 +256,9 @@ def main() -> None:
 			"7-Day Rolling Sales",
 			"28-Day Rolling Sales",
 			"isSale",
-		])
+		]
+		for writer in writers.values():
+			writer.writerow(header_row)
 
 		for row in reader:
 			processed_items += 1
@@ -254,13 +287,16 @@ def main() -> None:
 			rolling_sales_28d = compute_rolling_sales(daily_sales, 28)
 
 			for index, (day_label, sale_value) in enumerate(zip(day_labels, daily_sales)):
+				split_name = get_output_split(day_label)
+				if split_name is None:
+					continue
 				calendar_info = calendar_map.get(day_label, {})
 				weekday = calendar_info.get("weekday", "")
 				month = calendar_info.get("month", "")
 				event_name = calendar_info.get("event_name", "")
 				event_type = calendar_info.get("event_type", "")
 				is_sale = 1 if sale_value > 0 else 0
-				writer.writerow([
+				writers[split_name].writerow([
 					weekday,
 					month,
 					event_name,
@@ -276,7 +312,7 @@ def main() -> None:
 					rolling_sales_28d[index],
 					is_sale,
 				])
-				output_rows += 1
+				output_rows[split_name] += 1
 
 			if processed_items % 1000 == 0:
 				print(f"Processed items: {processed_items:,} | Intermittent items: {intermittent_items:,}")
@@ -284,8 +320,12 @@ def main() -> None:
 	print("Done")
 	print(f"Items processed: {processed_items:,}")
 	print(f"Intermittent items: {intermittent_items:,}")
-	print(f"Output rows written: {output_rows:,}")
-	print(f"Output file: {args.output_file}")
+	print(f"Train rows written: {output_rows['train']:,}")
+	print(f"Validate rows written: {output_rows['validate']:,}")
+	print(f"Evaluate rows written: {output_rows['evaluate']:,}")
+	print(f"Train output file: {args.train_output_file}")
+	print(f"Validate output file: {args.validate_output_file}")
+	print(f"Evaluate output file: {args.evaluate_output_file}")
 
 
 if __name__ == "__main__":

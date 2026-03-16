@@ -76,6 +76,16 @@ class WeightedIntermittentSalesMLP(IntermittentSalesMLP):
 		return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=self.pos_weight)
 
 
+class WAPEIntermittentSalesMLP(IntermittentSalesMLP):
+	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
+		super().__init__(input_dim=input_dim, hidden_1=hidden_1, hidden_2=hidden_2)
+
+	def compute_loss(self, logits, targets):
+		predictions = torch.sigmoid(logits)
+		numerator = torch.sum(torch.abs(targets - predictions))
+		denominator = torch.clamp(torch.sum(torch.abs(targets)), min=1e-6)
+		return numerator / denominator
+
 MODEL_REGISTRY = {
 	"mlp": IntermittentSalesMLP,
 	"weighted_mlp": WeightedIntermittentSalesMLP,
