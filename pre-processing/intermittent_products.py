@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
 	parser = argparse.ArgumentParser(
 		description="Identify intermittent products and export split calendar-enriched sales rows"
 	)
@@ -63,8 +63,8 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
-def load_calendar_map(calendar_file: Path) -> dict[str, dict[str, str]]:
-	calendar_map: dict[str, dict[str, str]] = {}
+def load_calendar_map(calendar_file):
+	calendar_map = {}
 	with calendar_file.open("r", newline="", encoding="utf-8") as handle:
 		reader = csv.DictReader(handle)
 		for row in reader:
@@ -89,8 +89,8 @@ def load_calendar_map(calendar_file: Path) -> dict[str, dict[str, str]]:
 	return calendar_map
 
 
-def load_price_map(prices_file: Path) -> dict[tuple[str, str, str], float]:
-	price_map: dict[tuple[str, str, str], float] = {}
+def load_price_map(prices_file):
+	price_map = {}
 	with prices_file.open("r", newline="", encoding="utf-8") as handle:
 		reader = csv.DictReader(handle)
 		for row in reader:
@@ -104,7 +104,7 @@ def load_price_map(prices_file: Path) -> dict[tuple[str, str, str], float]:
 	return price_map
 
 
-def compute_adi_cv2(daily_sales: list[int]) -> tuple[float, float]:
+def compute_adi_cv2(daily_sales):
 	n_days = len(daily_sales)
 	non_zero = [value for value in daily_sales if value > 0]
 	n_non_zero = len(non_zero)
@@ -126,13 +126,13 @@ def compute_adi_cv2(daily_sales: list[int]) -> tuple[float, float]:
 
 
 def build_price_series(
-	day_labels: list[str],
-	calendar_map: dict[str, dict[str, str]],
-	price_map: dict[tuple[str, str, str], float],
-	store_id: str,
-	item_id: str,
-) -> list[float]:
-	price_series: list[float] = []
+	day_labels,
+	calendar_map,
+	price_map,
+	store_id,
+	item_id,
+):
+	price_series = []
 	last_known_price = 0.0
 
 	for day_label in day_labels:
@@ -146,8 +146,8 @@ def build_price_series(
 	return price_series
 
 
-def compute_price_change_percentages(price_series: list[float], lookback_days: int) -> list[float]:
-	changes: list[float] = []
+def compute_price_change_percentages(price_series, lookback_days):
+	changes = []
 	for index, current_price in enumerate(price_series):
 		if index < lookback_days:
 			changes.append(0.0)
@@ -163,8 +163,8 @@ def compute_price_change_percentages(price_series: list[float], lookback_days: i
 	return changes
 
 
-def compute_time_since_last_sale(daily_sales: list[int]) -> list[int]:
-	time_since_last_sale: list[int] = []
+def compute_time_since_last_sale(daily_sales):
+	time_since_last_sale = []
 	last_sale_index = -1
 
 	for index, sale_value in enumerate(daily_sales):
@@ -179,8 +179,8 @@ def compute_time_since_last_sale(daily_sales: list[int]) -> list[int]:
 	return time_since_last_sale
 
 
-def compute_rolling_sales(daily_sales: list[int], window_size: int) -> list[int]:
-	rolling_sales: list[int] = []
+def compute_rolling_sales(daily_sales, window_size):
+	rolling_sales = []
 	running_total = 0
 
 	for index, sale_value in enumerate(daily_sales):
@@ -192,7 +192,7 @@ def compute_rolling_sales(daily_sales: list[int], window_size: int) -> list[int]
 	return rolling_sales
 
 
-def get_output_split(day_label: str) -> str | None:
+def get_output_split(day_label):
 	day_number = int(day_label.split("_")[1])
 	if 1 <= day_number <= 1885:
 		return "train"
@@ -203,7 +203,7 @@ def get_output_split(day_label: str) -> str | None:
 	return None
 
 
-def main() -> None:
+def main():
 	args = parse_args()
 
 	if not args.sales_file.exists():
@@ -266,7 +266,7 @@ def main() -> None:
 			dept_id = row[2]
 			store_id = row[4]
 
-			daily_sales: list[int] = []
+			daily_sales = []
 			for index in day_indices:
 				value = row[index].strip()
 				daily_sales.append(int(value) if value else 0)
