@@ -52,7 +52,7 @@ class IntermittentSalesMLP(BaseModel):
 
 	def initialize_weights(self):
 		for layer in self.network:
-			if isinstance(layer, nn.Linear):
+			if isinstance(layer, nn.Linear) and not layer is self.network[-1]:  # only for relu layers
 				nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu") # He initialization
 				if layer.bias is not None:
 					nn.init.zeros_(layer.bias)
@@ -109,23 +109,24 @@ def compute_metrics(y_true, y_pred):
 
 
 def load_and_encode_data(csv_path, max_rows=None):
+	feature_columns = ["Weekday", "Event Name", "Event Type", "item Id", "dept Id", "store id"]
 	df = pd.read_csv(
 		csv_path,
-		usecols=["Event Name", "Event Type", "isSale"],
+		usecols=feature_columns + ["isSale"],
 		nrows=max_rows,
 	)
 
-	df["Event Name"] = df["Event Name"].fillna("None")
-	df["Event Type"] = df["Event Type"].fillna("None")
+	for column in feature_columns:
+		df[column] = df[column].fillna("None").astype(str)
 	df["isSale"] = df["isSale"].astype(np.float32)
 
 	encoded_features = pd.get_dummies(
-		df[["Event Name", "Event Type"]],
-		columns=["Event Name", "Event Type"],
-		dtype=np.float32,
-	)# one hot encoding
+		df[feature_columns],
+		columns=feature_columns,
+		dtype=np.int8,
+	)
 
-	x_values = encoded_features.to_numpy(dtype=np.float32)
+	x_values = encoded_features.to_numpy(dtype=np.int8)
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
 	return x_values, y_values
@@ -219,8 +220,8 @@ def run_model(
 
 def main():
 	data_path = Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv"
-	max_rows = 50000
-	epochs = 8
+	max_rows = 1000000
+	epochs = 30
 	batch_size = 2048
 	learning_rate = 1e-3
 	test_size = 0.2
@@ -245,19 +246,19 @@ def main():
 	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
 	print(f"Using device: {device}")
 
-	mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
-	run_model(
-		model_name="mlp",
-		model=mlp_model,
-		x_train=x_train,
-		y_train=y_train,
-		x_test=x_test,
-		y_test=y_test,
-		device=device,
-		epochs=epochs,
-		batch_size=batch_size,
-		learning_rate=learning_rate,
-	)
+	#mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
+	#run_model(
+	#	model_name="mlp",
+	#	model=mlp_model,
+	#	x_train=x_train,
+	#	y_train=y_train,
+	#	x_test=x_test,
+	#	y_test=y_test,
+	#	device=device,
+	#	epochs=epochs,
+	#	batch_size=batch_size,
+	#	learning_rate=learning_rate,
+	#)
 
 	weighted_model = WeightedIntermittentSalesMLP(
 		input_dim=x_train.shape[1],
