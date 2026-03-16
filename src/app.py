@@ -52,7 +52,7 @@ class IntermittentSalesMLP(BaseModel):
 
 	def initialize_weights(self):
 		for layer in self.network:
-			if isinstance(layer, nn.Linear) and not layer is self.network[-1]:  # only for relu layers
+			if isinstance(layer, nn.Linear) and layer is not self.network[-1]:  # only for relu layers
 				nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu") # He initialization
 				if layer.bias is not None:
 					nn.init.zeros_(layer.bias)
@@ -107,10 +107,6 @@ class DynamicWeightedIntermittentSalesMLP(IntermittentSalesMLP):
 	def compute_loss(self, logits, targets):
 		return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=self.pos_weight)
 
-MODEL_REGISTRY = {
-	"mlp": IntermittentSalesMLP,
-	"weighted_mlp": WeightedIntermittentSalesMLP,
-}
 
 
 def compute_metrics(y_true, y_pred):
@@ -300,7 +296,6 @@ def main():
 	learning_rate = 1e-3
 	hidden_1 = 64
 	hidden_2 = 32
-	pos_weight = 2.0
 
 	torch.manual_seed(42)
 	np.random.seed(42)
