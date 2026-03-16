@@ -174,7 +174,7 @@ def load_dataset_frame(csv_path, categorical_columns, numeric_columns, max_rows=
 	return df
 
 
-def encode_features(df, categorical_columns, numeric_columns, encoded_columns=None):
+def encode_features(df, categorical_columns, numeric_columns, encoded_columns=None, numeric_stats=None):
 	encoded_features = pd.get_dummies(
 		df[categorical_columns],
 		columns=categorical_columns,
@@ -186,7 +186,15 @@ def encode_features(df, categorical_columns, numeric_columns, encoded_columns=No
 	else:
 		encoded_features = encoded_features.reindex(columns=encoded_columns, fill_value=0)
 
-	numeric_features = df[numeric_columns]
+	numeric_features = df[numeric_columns].copy()
+	if numeric_stats is None:
+		numeric_mean = numeric_features.mean()
+		numeric_std = numeric_features.std().replace(0, 1.0)
+		numeric_stats = (numeric_mean, numeric_std)
+	else:
+		numeric_mean, numeric_std = numeric_stats
+
+	numeric_features = (numeric_features - numeric_mean) / numeric_std
 
 	x_values = np.concatenate(
 		[
@@ -197,7 +205,7 @@ def encode_features(df, categorical_columns, numeric_columns, encoded_columns=No
 	)
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
-	return x_values, y_values, encoded_columns
+	return x_values, y_values, encoded_columns, numeric_stats
 
 
 def get_device():
@@ -302,9 +310,25 @@ def main():
 	validate_df = load_dataset_frame(validate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
 	evaluate_df = load_dataset_frame(evaluate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
 
-	x_train_values, y_train_values, encoded_columns = encode_features(train_df, categorical_columns, numeric_columns)
-	x_validate_values, y_validate_values, _ = encode_features(validate_df, categorical_columns, numeric_columns, encoded_columns)
-	x_evaluate_values, y_evaluate_values, _ = encode_features(evaluate_df, categorical_columns, numeric_columns, encoded_columns)
+	x_train_values, y_train_values, encoded_columns, numeric_stats = encode_features(
+		train_df,
+		categorical_columns,
+		numeric_columns,
+	)
+	x_validate_values, y_validate_values, _, _ = encode_features(
+		validate_df,
+		categorical_columns,
+		numeric_columns,
+		encoded_columns,
+		numeric_stats,
+	)
+	x_evaluate_values, y_evaluate_values, _, _ = encode_features(
+		evaluate_df,
+		categorical_columns,
+		numeric_columns,
+		encoded_columns,
+		numeric_stats,
+	)
 
 	unique_labels = np.unique(y_train_values)
 	if unique_labels.size < 2:
