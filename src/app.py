@@ -86,6 +86,27 @@ class WAPEIntermittentSalesMLP(IntermittentSalesMLP):
 		denominator = torch.clamp(torch.sum(torch.abs(targets)), min=1e-6)
 		return numerator / denominator
 
+
+class DynamicWeightedIntermittentSalesMLP(IntermittentSalesMLP):
+	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
+		super().__init__(input_dim=input_dim, hidden_1=hidden_1, hidden_2=hidden_2)
+		self.register_buffer("pos_weight", torch.tensor([1.0], dtype=torch.float32))
+
+	def set_pos_weight_from_targets(self, y_train, device):
+		total_ones = y_train.sum().item()
+		total_zeros = len(y_train) - total_ones
+
+		if total_ones <= 0:
+			dynamic_weight = 1.0
+		else:
+			dynamic_weight = total_zeros / total_ones
+
+		print(f"Calculated Dynamic pos_weight: {dynamic_weight:.4f}")
+		self.pos_weight = torch.tensor([dynamic_weight], device=device, dtype=torch.float32)
+
+	def compute_loss(self, logits, targets):
+		return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=self.pos_weight)
+
 MODEL_REGISTRY = {
 	"mlp": IntermittentSalesMLP,
 	"weighted_mlp": WeightedIntermittentSalesMLP,
@@ -118,7 +139,7 @@ def compute_metrics(y_true, y_pred):
 	}
 
 
-def load_and_encode_data(csv_path, max_rows=None):
+def get_feature_columns():
 	categorical_columns = [
 		"Weekday",
 		"Month",
@@ -135,6 +156,10 @@ def load_and_encode_data(csv_path, max_rows=None):
 		"7-Day Rolling Sales",
 		"28-Day Rolling Sales",
 	]
+	return categorical_columns, numeric_columns
+
+
+def load_dataset_frame(csv_path, categorical_columns, numeric_columns, max_rows=None):
 	df = pd.read_csv(
 		csv_path,
 		usecols=categorical_columns + numeric_columns + ["isSale"],
@@ -146,12 +171,21 @@ def load_and_encode_data(csv_path, max_rows=None):
 	for column in numeric_columns:
 		df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0).astype(np.float32)
 	df["isSale"] = df["isSale"].astype(np.float32)
+	return df
 
+
+def encode_features(df, categorical_columns, numeric_columns, encoded_columns=None):
 	encoded_features = pd.get_dummies(
 		df[categorical_columns],
 		columns=categorical_columns,
 		dtype=np.int8,
 	)
+
+	if encoded_columns is None:
+		encoded_columns = encoded_features.columns.tolist()
+	else:
+		encoded_features = encoded_features.reindex(columns=encoded_columns, fill_value=0)
+
 	numeric_features = df[numeric_columns]
 
 	x_values = np.concatenate(
@@ -163,27 +197,7 @@ def load_and_encode_data(csv_path, max_rows=None):
 	)
 	y_values = df["isSale"].to_numpy(dtype=np.float32)
 
-	return x_values, y_values
-
-
-def build_train_test_tensors(
-	x_values,
-	y_values,
-	test_size,
-):
-	num_rows = x_values.shape[0]
-	shuffled_indices = np.random.permutation(num_rows)
-	test_count = int(num_rows * test_size)
-
-	test_indices = shuffled_indices[:test_count]
-	train_indices = shuffled_indices[test_count:]
-
-	x_train = torch.tensor(x_values[train_indices], dtype=torch.float32)
-	y_train = torch.tensor(y_values[train_indices], dtype=torch.float32).unsqueeze(1)
-	x_test = torch.tensor(x_values[test_indices], dtype=torch.float32)
-	y_test = torch.tensor(y_values[test_indices], dtype=torch.float32).unsqueeze(1)
-
-	return x_train, y_train, x_test, y_test
+	return x_values, y_values, encoded_columns
 
 
 def get_device():
@@ -229,54 +243,85 @@ def run_model(
 	model,
 	x_train,
 	y_train,
-	x_test,
-	y_test,
+	x_validate,
+	y_validate,
+	x_evaluate,
+	y_evaluate,
 	device,
 	epochs,
 	batch_size,
 	learning_rate,
 ):
+	if hasattr(model, "set_pos_weight_from_targets"):
+		model.set_pos_weight_from_targets(y_train, device)
+
 	train_loader = DataLoader(TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
 	optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 	print(f"\nRunning model: {model_name}")
 	train_model(model, train_loader, optimizer, device, epochs)
-	predictions = evaluate_model(model, x_test, device)
+	validate_predictions = evaluate_model(model, x_validate, device)
+	evaluate_predictions = evaluate_model(model, x_evaluate, device)
 
-	metrics = compute_metrics(y_test.squeeze(1).numpy(), predictions)
-	print("Evaluation on test set")
-	print(f"Accuracy : {metrics['accuracy']:.4f}")
-	print(f"Precision: {metrics['precision']:.4f}")
-	print(f"Recall   : {metrics['recall']:.4f}")
-	print(f"F1 Score : {metrics['f1']:.4f}")
-	print(f"Confusion Matrix -> TP: {metrics['tp']} TN: {metrics['tn']} FP: {metrics['fp']} FN: {metrics['fn']}")
+	validate_metrics = compute_metrics(y_validate.squeeze(1).numpy(), validate_predictions)
+	evaluate_metrics = compute_metrics(y_evaluate.squeeze(1).numpy(), evaluate_predictions)
+
+	print("Validation metrics")
+	print(f"Accuracy : {validate_metrics['accuracy']:.4f}")
+	print(f"Precision: {validate_metrics['precision']:.4f}")
+	print(f"Recall   : {validate_metrics['recall']:.4f}")
+	print(f"F1 Score : {validate_metrics['f1']:.4f}")
+	print(f"Confusion Matrix -> TP: {validate_metrics['tp']} TN: {validate_metrics['tn']} FP: {validate_metrics['fp']} FN: {validate_metrics['fn']}")
+
+	print("Evaluation metrics")
+	print(f"Accuracy : {evaluate_metrics['accuracy']:.4f}")
+	print(f"Precision: {evaluate_metrics['precision']:.4f}")
+	print(f"Recall   : {evaluate_metrics['recall']:.4f}")
+	print(f"F1 Score : {evaluate_metrics['f1']:.4f}")
+	print(f"Confusion Matrix -> TP: {evaluate_metrics['tp']} TN: {evaluate_metrics['tn']} FP: {evaluate_metrics['fp']} FN: {evaluate_metrics['fn']}")
 
 
 def main():
-	data_path = Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv"
-	max_rows = 10000000
-	epochs = 30
+	output_dir = Path(__file__).resolve().parents[1] / "outputs"
+	train_data_path = output_dir / "intermittent_train_data.csv"
+	validate_data_path = output_dir / "intermittent_validate_data.csv"
+	evaluate_data_path = output_dir / "intermittent_evaluate_data.csv"
+	max_rows = 1000000
+	epochs = 10
 	batch_size = 2048
 	learning_rate = 1e-3
-	test_size = 0.2
 	hidden_1 = 64
 	hidden_2 = 32
 	pos_weight = 2.0
 
 	torch.manual_seed(42)
 	np.random.seed(42)
+	categorical_columns, numeric_columns = get_feature_columns()
 
-	x_values, y_values = load_and_encode_data(data_path, max_rows=max_rows)
-	unique_labels = np.unique(y_values)
+	train_df = load_dataset_frame(train_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
+	validate_df = load_dataset_frame(validate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
+	evaluate_df = load_dataset_frame(evaluate_data_path, categorical_columns, numeric_columns, max_rows=max_rows)
+
+	x_train_values, y_train_values, encoded_columns = encode_features(train_df, categorical_columns, numeric_columns)
+	x_validate_values, y_validate_values, _ = encode_features(validate_df, categorical_columns, numeric_columns, encoded_columns)
+	x_evaluate_values, y_evaluate_values, _ = encode_features(evaluate_df, categorical_columns, numeric_columns, encoded_columns)
+
+	unique_labels = np.unique(y_train_values)
 	if unique_labels.size < 2:
-		raise ValueError("Target column 'isSale' has only one class in loaded rows.")
+		raise ValueError("Target column 'isSale' has only one class in train rows.")
 
-	x_train, y_train, x_test, y_test = build_train_test_tensors(x_values, y_values, test_size)
+	x_train = torch.tensor(x_train_values, dtype=torch.float32)
+	y_train = torch.tensor(y_train_values, dtype=torch.float32).unsqueeze(1)
+	x_validate = torch.tensor(x_validate_values, dtype=torch.float32)
+	y_validate = torch.tensor(y_validate_values, dtype=torch.float32).unsqueeze(1)
+	x_evaluate = torch.tensor(x_evaluate_values, dtype=torch.float32)
+	y_evaluate = torch.tensor(y_evaluate_values, dtype=torch.float32).unsqueeze(1)
 
 	device = get_device()
 
-	num_rows = x_values.shape[0]
-	print(f"Loaded rows: {num_rows}")
+	print(f"Train rows loaded: {len(x_train)}")
+	print(f"Validate rows loaded: {len(x_validate)}")
+	print(f"Evaluate rows loaded: {len(x_evaluate)}")
 	print(f"Feature dimension after one-hot encoding: {x_train.shape[1]}")
 	print(f"Using device: {device}")
 
@@ -294,25 +339,61 @@ def main():
 	#	learning_rate=learning_rate,
 	#)
 
-	weighted_model = WeightedIntermittentSalesMLP(
+	# weighted_model = WeightedIntermittentSalesMLP(
+	# 	input_dim=x_train.shape[1],
+	# 	hidden_1=hidden_1,
+	# 	hidden_2=hidden_2,
+	# 	pos_weight=pos_weight,
+	# ).to(device)
+	# run_model(
+	# 	model_name="weighted_mlp",
+	# 	model=weighted_model,
+	# 	x_train=x_train,
+	# 	y_train=y_train,
+	# 	x_validate=x_validate,
+	# 	y_validate=y_validate,
+	# 	x_evaluate=x_evaluate,
+	# 	y_evaluate=y_evaluate,
+	# 	device=device,
+	# 	epochs=epochs,
+	# 	batch_size=batch_size,
+	# 	learning_rate=learning_rate,
+	# )
+	# wape_model = WAPEIntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
+	# run_model(
+	# 	model_name="wape_mlp",
+	# 	model=wape_model,
+	# 	x_train=x_train,	
+	# 	y_train=y_train,
+	# 	x_validate=x_validate,
+	# 	y_validate=y_validate,	
+	# 	x_evaluate=x_evaluate,	
+	# 	y_evaluate=y_evaluate,
+	# 	device=device,
+	# 	epochs=epochs,
+	# 	batch_size=batch_size,
+	# 	learning_rate=learning_rate,
+	# )
+
+	dynamic_weighted_model = DynamicWeightedIntermittentSalesMLP(
 		input_dim=x_train.shape[1],
 		hidden_1=hidden_1,
 		hidden_2=hidden_2,
-		pos_weight=pos_weight,
 	).to(device)
 	run_model(
-		model_name="weighted_mlp",
-		model=weighted_model,
+		model_name="dynamic_weighted_mlp",
+		model=dynamic_weighted_model,
 		x_train=x_train,
 		y_train=y_train,
-		x_test=x_test,
-		y_test=y_test,
+		x_validate=x_validate,
+		y_validate=y_validate,
+		x_evaluate=x_evaluate,
+		y_evaluate=y_evaluate,
 		device=device,
 		epochs=epochs,
 		batch_size=batch_size,
 		learning_rate=learning_rate,
 	)
-
 
 if __name__ == "__main__":
 	main()
