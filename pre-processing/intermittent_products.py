@@ -25,6 +25,12 @@ def parse_args() -> argparse.Namespace:
 		help="Path to calendar CSV",
 	)
 	parser.add_argument(
+		"--prices-file",
+		type=Path,
+		default=project_root / "data" / "sell_prices.csv",
+		help="Path to sell prices CSV",
+	)
+	parser.add_argument(
 		"--output-file",
 		type=Path,
 		default=project_root / "outputs" / "intermittent_data.csv",
@@ -45,22 +51,45 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
-def load_calendar_map(calendar_file: Path) -> dict[str, tuple[str, str, str]]:
-	calendar_map: dict[str, tuple[str, str, str]] = {}
+def load_calendar_map(calendar_file: Path) -> dict[str, dict[str, str]]:
+	calendar_map: dict[str, dict[str, str]] = {}
 	with calendar_file.open("r", newline="", encoding="utf-8") as handle:
 		reader = csv.DictReader(handle)
 		for row in reader:
 			day_key = row.get("d", "")
 			weekday = row.get("weekday", "")
+			month = row.get("month", "")
+			wm_yr_wk = row.get("wm_yr_wk", "")
 			event_name_1 = row.get("event_name_1", "")
 			event_name_2 = row.get("event_name_2", "")
 			event_type_1 = row.get("event_type_1", "")
 			event_type_2 = row.get("event_type_2", "")
 
 			event_name = event_name_1 if event_name_1 else event_name_2
-			event_type = event_type_1 if event_type_1 else event_type_2#losing some data here!!! TODO FIX. this
-			calendar_map[day_key] = (weekday, event_name, event_type)
+			event_type = event_type_1 if event_type_1 else event_type_2
+			calendar_map[day_key] = {
+				"weekday": weekday,
+				"month": month,
+				"wm_yr_wk": wm_yr_wk,
+				"event_name": event_name,
+				"event_type": event_type,
+			}
 	return calendar_map
+
+
+def load_price_map(prices_file: Path) -> dict[tuple[str, str, str], float]:
+	price_map: dict[tuple[str, str, str], float] = {}
+	with prices_file.open("r", newline="", encoding="utf-8") as handle:
+		reader = csv.DictReader(handle)
+		for row in reader:
+			store_id = row.get("store_id", "")
+			item_id = row.get("item_id", "")
+			wm_yr_wk = row.get("wm_yr_wk", "")
+			sell_price = row.get("sell_price", "")
+			if not store_id or not item_id or not wm_yr_wk or not sell_price:
+				continue
+			price_map[(store_id, item_id, wm_yr_wk)] = float(sell_price)
+	return price_map
 
 
 def compute_adi_cv2(daily_sales: list[int]) -> tuple[float, float]:
@@ -84,6 +113,60 @@ def compute_adi_cv2(daily_sales: list[int]) -> tuple[float, float]:
 	return adi, cv2
 
 
+def build_price_series(
+	day_labels: list[str],
+	calendar_map: dict[str, dict[str, str]],
+	price_map: dict[tuple[str, str, str], float],
+	store_id: str,
+	item_id: str,
+) -> list[float]:
+	price_series: list[float] = []
+	last_known_price = 0.0
+
+	for day_label in day_labels:
+		calendar_info = calendar_map.get(day_label, {})
+		wm_yr_wk = calendar_info.get("wm_yr_wk", "")
+		current_price = price_map.get((store_id, item_id, wm_yr_wk), last_known_price)
+		price_series.append(current_price)
+		if current_price > 0:
+			last_known_price = current_price
+
+	return price_series
+
+
+def compute_price_change_percentages(price_series: list[float], lookback_days: int) -> list[float]:
+	changes: list[float] = []
+	for index, current_price in enumerate(price_series):
+		if index < lookback_days:
+			changes.append(0.0)
+			continue
+
+		previous_price = price_series[index - lookback_days]
+		if previous_price <= 0 or current_price <= 0:
+			changes.append(0.0)
+			continue
+
+		changes.append((current_price - previous_price) / previous_price)
+
+	return changes
+
+
+def compute_time_since_last_sale(daily_sales: list[int]) -> list[int]:
+	time_since_last_sale: list[int] = []
+	last_sale_index = -1
+
+	for index, sale_value in enumerate(daily_sales):
+		if last_sale_index == -1:
+			time_since_last_sale.append(-1)
+		else:
+			time_since_last_sale.append(index - last_sale_index)
+
+		if sale_value > 0:
+			last_sale_index = index
+
+	return time_since_last_sale
+
+
 def main() -> None:
 	args = parse_args()
 
@@ -91,9 +174,12 @@ def main() -> None:
 		raise FileNotFoundError(f"Sales file not found: {args.sales_file}")
 	if not args.calendar_file.exists():
 		raise FileNotFoundError(f"Calendar file not found: {args.calendar_file}")
+	if not args.prices_file.exists():
+		raise FileNotFoundError(f"Prices file not found: {args.prices_file}")
 
 	args.output_file.parent.mkdir(parents=True, exist_ok=True)
 	calendar_map = load_calendar_map(args.calendar_file)
+	price_map = load_price_map(args.prices_file)
 
 	processed_items = 0
 	intermittent_items = 0
@@ -113,11 +199,15 @@ def main() -> None:
 		writer = csv.writer(out_handle)
 		writer.writerow([
 			"Weekday",
+			"Month",
 			"Event Name",
 			"Event Type",
 			"item Id",
 			"dept Id",
 			"store id",
+			"Price Change Percentage 7d",
+			"Price Change Percentage 30d",
+			"Time Since Last Sale",
 			"isSale",
 		])
 
@@ -139,17 +229,29 @@ def main() -> None:
 				continue
 
 			intermittent_items += 1
+			price_series = build_price_series(day_labels, calendar_map, price_map, store_id, item_id)
+			price_change_7d = compute_price_change_percentages(price_series, 7)
+			price_change_30d = compute_price_change_percentages(price_series, 30)
+			time_since_last_sale = compute_time_since_last_sale(daily_sales)
 
-			for day_label, sale_value in zip(day_labels, daily_sales):
-				weekday, event_name, event_type = calendar_map.get(day_label, ("", "", ""))
+			for index, (day_label, sale_value) in enumerate(zip(day_labels, daily_sales)):
+				calendar_info = calendar_map.get(day_label, {})
+				weekday = calendar_info.get("weekday", "")
+				month = calendar_info.get("month", "")
+				event_name = calendar_info.get("event_name", "")
+				event_type = calendar_info.get("event_type", "")
 				is_sale = 1 if sale_value > 0 else 0
 				writer.writerow([
 					weekday,
+					month,
 					event_name,
 					event_type,
 					item_id,
 					dept_id,
 					store_id,
+					price_change_7d[index],
+					price_change_30d[index],
+					time_since_last_sale[index],
 					is_sale,
 				])
 				output_rows += 1

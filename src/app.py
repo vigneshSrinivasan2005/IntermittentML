@@ -109,7 +109,7 @@ def compute_metrics(y_true, y_pred):
 
 
 def load_and_encode_data(csv_path, max_rows=None):
-	feature_columns = ["Weekday", "Event Name", "Event Type", "item Id", "dept Id", "store id"]
+	feature_columns = ["Weekday", "Event Name", "Event Type", "dept Id", "store id"]
 	df = pd.read_csv(
 		csv_path,
 		usecols=feature_columns + ["isSale"],
@@ -220,7 +220,7 @@ def run_model(
 
 def main():
 	data_path = Path(__file__).resolve().parents[1] / "outputs" / "intermittent_data.csv"
-	max_rows = 1000000
+	max_rows = 10000000
 	epochs = 30
 	batch_size = 2048
 	learning_rate = 1e-3
