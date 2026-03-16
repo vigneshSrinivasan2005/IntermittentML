@@ -167,6 +167,19 @@ def compute_time_since_last_sale(daily_sales: list[int]) -> list[int]:
 	return time_since_last_sale
 
 
+def compute_rolling_sales(daily_sales: list[int], window_size: int) -> list[int]:
+	rolling_sales: list[int] = []
+	running_total = 0
+
+	for index, sale_value in enumerate(daily_sales):
+		running_total += sale_value
+		if index >= window_size:
+			running_total -= daily_sales[index - window_size]
+		rolling_sales.append(running_total)
+
+	return rolling_sales
+
+
 def main() -> None:
 	args = parse_args()
 
@@ -208,6 +221,9 @@ def main() -> None:
 			"Price Change Percentage 7d",
 			"Price Change Percentage 30d",
 			"Time Since Last Sale",
+			"3-Day Rolling Sales",
+			"7-Day Rolling Sales",
+			"28-Day Rolling Sales",
 			"isSale",
 		])
 
@@ -233,6 +249,9 @@ def main() -> None:
 			price_change_7d = compute_price_change_percentages(price_series, 7)
 			price_change_30d = compute_price_change_percentages(price_series, 30)
 			time_since_last_sale = compute_time_since_last_sale(daily_sales)
+			rolling_sales_3d = compute_rolling_sales(daily_sales, 3)
+			rolling_sales_7d = compute_rolling_sales(daily_sales, 7)
+			rolling_sales_28d = compute_rolling_sales(daily_sales, 28)
 
 			for index, (day_label, sale_value) in enumerate(zip(day_labels, daily_sales)):
 				calendar_info = calendar_map.get(day_label, {})
@@ -252,6 +271,9 @@ def main() -> None:
 					price_change_7d[index],
 					price_change_30d[index],
 					time_since_last_sale[index],
+					rolling_sales_3d[index],
+					rolling_sales_7d[index],
+					rolling_sales_28d[index],
 					is_sale,
 				])
 				output_rows += 1
