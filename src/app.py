@@ -10,6 +10,16 @@ from torch.utils.data import DataLoader, TensorDataset
 
 
 class BaseModel(nn.Module, ABC):
+	@classmethod
+	@abstractmethod
+	def add_model_args(cls, parser):
+		pass
+
+	@classmethod
+	@abstractmethod
+	def from_args(cls, args, input_dim):
+		pass
+
 	@abstractmethod
 	def forward(self, features):
 		pass
@@ -32,6 +42,15 @@ class BaseModel(nn.Module, ABC):
 
 
 class IntermittentSalesMLP(BaseModel):
+	@classmethod
+	def add_model_args(cls, parser):
+		parser.add_argument("--hidden-1", type=int, default=64, help="First hidden layer size")
+		parser.add_argument("--hidden-2", type=int, default=32, help="Second hidden layer size")
+
+	@classmethod
+	def from_args(cls, args, input_dim):
+		return cls(input_dim=input_dim, hidden_1=args.hidden_1, hidden_2=args.hidden_2)
+
 	def __init__(self, input_dim, hidden_1=64, hidden_2=32):
 		super().__init__()
 		self.network = nn.Sequential(
@@ -67,7 +86,7 @@ class IntermittentSalesMLP(BaseModel):
 		return (probabilities >= threshold).to(dtype=torch.int32)
 
 
-def parse_args():
+def parse_args(model_class):
 	parser = argparse.ArgumentParser(description="Train a basic intermittent sales model")
 	parser.add_argument(
 		"--data",
@@ -78,7 +97,8 @@ def parse_args():
 	parser.add_argument("--epochs", type=int, default=8, help="Training epochs")
 	parser.add_argument("--batch-size", type=int, default=2048, help="Batch size")
 	parser.add_argument("--learning-rate", type=float, default=1e-3, help="Optimizer learning rate")
-	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio") #80 -20 test train split
+	parser.add_argument("--test-size", type=float, default=0.2, help="Test split ratio")
+	model_class.add_model_args(parser)
 	return parser.parse_args()
 
 
@@ -190,7 +210,8 @@ def evaluate_model(model, x_test, device):
 
 
 def main():
-	args = parse_args()
+	model_class = IntermittentSalesMLP
+	args = parse_args(model_class)
 
 	torch.manual_seed(42)
 	np.random.seed(42)
@@ -206,7 +227,7 @@ def main():
 
 	device = get_device()
 
-	model = IntermittentSalesMLP(input_dim=x_train.shape[1]).to(device)
+	model = model_class.from_args(args, input_dim=x_train.shape[1]).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
 	num_rows = x_values.shape[0]
