@@ -114,7 +114,6 @@ def load_and_encode_data(csv_path, max_rows=None):
 		"Month",
 		"Event Name",
 		"Event Type",
-		"item Id",
 		"dept Id",
 		"store id",
 	]
