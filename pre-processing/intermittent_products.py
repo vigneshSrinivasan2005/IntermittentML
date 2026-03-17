@@ -184,10 +184,11 @@ def compute_rolling_sales(daily_sales, window_size):
 	running_total = 0
 
 	for index, sale_value in enumerate(daily_sales):
+		# Use only prior days to avoid leaking same-day target information.
+		rolling_sales.append(running_total)
 		running_total += sale_value
 		if index >= window_size:
 			running_total -= daily_sales[index - window_size]
-		rolling_sales.append(running_total)
 
 	return rolling_sales
 
