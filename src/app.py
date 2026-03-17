@@ -238,6 +238,31 @@ def train_model(
 	y_validate,
 ):
 	history_rows = []
+	train_metrics, train_eval_loss = evaluate_split(model, x_train, y_train, device)
+	validate_metrics, validate_loss = evaluate_split(model, x_validate, y_validate, device)
+	history_rows.append(
+		{
+			"epoch": 0,
+			"train_loss": train_eval_loss,
+			"train_eval_loss": train_eval_loss,
+			"validate_loss": validate_loss,
+			"train_accuracy": train_metrics["accuracy"],
+			"validate_accuracy": validate_metrics["accuracy"],
+			"train_precision": train_metrics["precision"],
+			"validate_precision": validate_metrics["precision"],
+			"train_recall": train_metrics["recall"],
+			"validate_recall": validate_metrics["recall"],
+			"train_f1": train_metrics["f1"],
+			"validate_f1": validate_metrics["f1"],
+		}
+	)
+
+	print(
+		f"Epoch 00/{epochs} - loss: {train_eval_loss:.5f} "
+		f"train_acc: {train_metrics['accuracy']:.4f} val_acc: {validate_metrics['accuracy']:.4f} "
+		f"val_f1: {validate_metrics['f1']:.4f}"
+	)
+
 	model.train()
 	for epoch in range(1, epochs + 1):
 		epoch_loss = 0.0
@@ -444,56 +469,56 @@ def main():
 	wape_numeric_mode = "normalized"
 	dynamic_weighted_numeric_mode = "non_normalized"
 
-	# x_train = torch.tensor(x_train_by_mode[mlp_numeric_mode], dtype=torch.float32)
-	# x_validate = torch.tensor(x_validate_by_mode[mlp_numeric_mode], dtype=torch.float32)
-	# x_evaluate = torch.tensor(x_evaluate_by_mode[mlp_numeric_mode], dtype=torch.float32)
-	# print(f"Preparing model 'mlp' with numeric_mode='{mlp_numeric_mode}' (feature_dim={x_train.shape[1]})")
+	x_train = torch.tensor(x_train_by_mode[mlp_numeric_mode], dtype=torch.float32)
+	x_validate = torch.tensor(x_validate_by_mode[mlp_numeric_mode], dtype=torch.float32)
+	x_evaluate = torch.tensor(x_evaluate_by_mode[mlp_numeric_mode], dtype=torch.float32)
+	print(f"Preparing model 'mlp' with numeric_mode='{mlp_numeric_mode}' (feature_dim={x_train.shape[1]})")
 
-	# mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
-	# run_model(
-	# 	model_name="mlp",
-	# 	model=mlp_model,
-	# 	numeric_mode=mlp_numeric_mode,
-	# 	x_train=x_train,
-	# 	y_train=y_train,
-	# 	x_validate=x_validate,
-	# 	y_validate=y_validate,
-	# 	x_evaluate=x_evaluate,
-	# 	y_evaluate=y_evaluate,
-	# 	output_dir=output_dir,
-	# 	device=device,
-	# 	epochs=epochs,
-	# 	batch_size=batch_size,
-	# 	learning_rate=learning_rate,
-	# )
+	mlp_model = IntermittentSalesMLP(input_dim=x_train.shape[1], hidden_1=hidden_1, hidden_2=hidden_2).to(device)
+	run_model(
+		model_name="mlp",
+		model=mlp_model,
+		numeric_mode=mlp_numeric_mode,
+		x_train=x_train,
+		y_train=y_train,
+		x_validate=x_validate,
+		y_validate=y_validate,
+		x_evaluate=x_evaluate,
+		y_evaluate=y_evaluate,
+		output_dir=output_dir,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
 
-	# x_train = torch.tensor(x_train_by_mode[weighted_numeric_mode], dtype=torch.float32)
-	# x_validate = torch.tensor(x_validate_by_mode[weighted_numeric_mode], dtype=torch.float32)
-	# x_evaluate = torch.tensor(x_evaluate_by_mode[weighted_numeric_mode], dtype=torch.float32)
-	# print(f"Preparing model 'weighted_mlp' with numeric_mode='{weighted_numeric_mode}' (feature_dim={x_train.shape[1]})")
+	x_train = torch.tensor(x_train_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	x_validate = torch.tensor(x_validate_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	x_evaluate = torch.tensor(x_evaluate_by_mode[weighted_numeric_mode], dtype=torch.float32)
+	print(f"Preparing model 'weighted_mlp' with numeric_mode='{weighted_numeric_mode}' (feature_dim={x_train.shape[1]})")
 
-	# weighted_model = WeightedIntermittentSalesMLP(
-	# 	input_dim=x_train.shape[1],
-	# 	hidden_1=hidden_1,
-	# 	hidden_2=hidden_2,
-	# 	pos_weight=pos_weight,
-	# ).to(device)
-	# run_model(
-	# 	model_name="weighted_mlp",
-	# 	model=weighted_model,
-	# 	numeric_mode=weighted_numeric_mode,
-	# 	x_train=x_train,
-	# 	y_train=y_train,
-	# 	x_validate=x_validate,
-	# 	y_validate=y_validate,
-	# 	x_evaluate=x_evaluate,
-	# 	y_evaluate=y_evaluate,
-	# 	output_dir=output_dir,
-	# 	device=device,
-	# 	epochs=epochs,
-	# 	batch_size=batch_size,
-	# 	learning_rate=learning_rate,
-	# )
+	weighted_model = WeightedIntermittentSalesMLP(
+		input_dim=x_train.shape[1],
+		hidden_1=hidden_1,
+		hidden_2=hidden_2,
+		pos_weight=pos_weight,
+	).to(device)
+	run_model(
+		model_name="weighted_mlp",
+		model=weighted_model,
+		numeric_mode=weighted_numeric_mode,
+		x_train=x_train,
+		y_train=y_train,
+		x_validate=x_validate,
+		y_validate=y_validate,
+		x_evaluate=x_evaluate,
+		y_evaluate=y_evaluate,
+		output_dir=output_dir,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
 
 	x_train = torch.tensor(x_train_by_mode[wape_numeric_mode], dtype=torch.float32)
 	x_validate = torch.tensor(x_validate_by_mode[wape_numeric_mode], dtype=torch.float32)
@@ -518,32 +543,32 @@ def main():
 		learning_rate=learning_rate,
 	)
 
-	# x_train = torch.tensor(x_train_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
-	# x_validate = torch.tensor(x_validate_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
-	# x_evaluate = torch.tensor(x_evaluate_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
-	# print(f"Preparing model 'dynamic_weighted_mlp' with numeric_mode='{dynamic_weighted_numeric_mode}' (feature_dim={x_train.shape[1]})")
+	x_train = torch.tensor(x_train_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
+	x_validate = torch.tensor(x_validate_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
+	x_evaluate = torch.tensor(x_evaluate_by_mode[dynamic_weighted_numeric_mode], dtype=torch.float32)
+	print(f"Preparing model 'dynamic_weighted_mlp' with numeric_mode='{dynamic_weighted_numeric_mode}' (feature_dim={x_train.shape[1]})")
 
-	# dynamic_weighted_model = DynamicWeightedIntermittentSalesMLP(
-	# 	input_dim=x_train.shape[1],
-	# 	hidden_1=hidden_1,
-	# 	hidden_2=hidden_2,
-	# ).to(device)
-	# run_model(
-	# 	model_name="dynamic_weighted_mlp",
-	# 	model=dynamic_weighted_model,
-	# 	numeric_mode=dynamic_weighted_numeric_mode,
-	# 	x_train=x_train,
-	# 	y_train=y_train,
-	# 	x_validate=x_validate,
-	# 	y_validate=y_validate,
-	# 	x_evaluate=x_evaluate,
-	# 	y_evaluate=y_evaluate,
-	# 	output_dir=output_dir,
-	# 	device=device,
-	# 	epochs=epochs,
-	# 	batch_size=batch_size,
-	# 	learning_rate=learning_rate,
-	# )
+	dynamic_weighted_model = DynamicWeightedIntermittentSalesMLP(
+		input_dim=x_train.shape[1],
+		hidden_1=hidden_1,
+		hidden_2=hidden_2,
+	).to(device)
+	run_model(
+		model_name="dynamic_weighted_mlp",
+		model=dynamic_weighted_model,
+		numeric_mode=dynamic_weighted_numeric_mode,
+		x_train=x_train,
+		y_train=y_train,
+		x_validate=x_validate,
+		y_validate=y_validate,
+		x_evaluate=x_evaluate,
+		y_evaluate=y_evaluate,
+		output_dir=output_dir,
+		device=device,
+		epochs=epochs,
+		batch_size=batch_size,
+		learning_rate=learning_rate,
+	)
 
 if __name__ == "__main__":
 	main()
