@@ -414,8 +414,8 @@ def main():
 	train_data_path = output_dir / "intermittent_train_data.csv"
 	validate_data_path = output_dir / "intermittent_validate_data.csv"
 	evaluate_data_path = output_dir / "intermittent_evaluate_data.csv"
-	max_rows = 1000000
-	epochs = 30
+	max_rows = 10000000
+	epochs = 10
 	batch_size = 2048
 	learning_rate = 1e-3
 	hidden_1 = 64
@@ -464,10 +464,10 @@ def main():
 	print(f"Evaluate rows loaded: {len(y_evaluate)}")
 	print(f"Available numeric feature modes: {', '.join(sorted(x_train_by_mode.keys()))}")
 	print(f"Using device: {device}")
-	mlp_numeric_mode = "non_normalized"
-	weighted_numeric_mode = "non_normalized"
+	mlp_numeric_mode = "normalized"
+	weighted_numeric_mode = "normalized"
 	wape_numeric_mode = "normalized"
-	dynamic_weighted_numeric_mode = "non_normalized"
+	dynamic_weighted_numeric_mode = "normalized"
 
 	x_train = torch.tensor(x_train_by_mode[mlp_numeric_mode], dtype=torch.float32)
 	x_validate = torch.tensor(x_validate_by_mode[mlp_numeric_mode], dtype=torch.float32)
