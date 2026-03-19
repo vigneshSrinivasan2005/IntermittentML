@@ -1,5 +1,4 @@
 import numpy as np
-import copy
 import matplotlib.pyplot as plt
 # GOAL THIS TIME IS TO TRY USING CROSS ENTROPY LOSS INSTEAD OF MSE.
 def get_mnist():
@@ -15,7 +14,7 @@ def get_mnist():
 
     def load_data(src, num_samples):
         print("Downloading " + src)
-        gzfname, h = urlretrieve(src, "./delete.me")
+        gzfname, _ = urlretrieve(src, "./delete.me")
         print("Done.")
         try:
             with gzip.open(gzfname) as gz:
@@ -46,7 +45,7 @@ def get_mnist():
 
     def load_labels(src, num_samples):
         print("Downloading " + src)
-        gzfname, h = urlretrieve(src, "./delete.me")
+        gzfname, _ = urlretrieve(src, "./delete.me")
         print("Done.")
         try:
             with gzip.open(gzfname) as gz:

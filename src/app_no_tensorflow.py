@@ -1,5 +1,4 @@
 from pathlib import Path
-from abc import ABC, abstractmethod
 import json
 
 import numpy as np
@@ -11,26 +10,6 @@ from fromScratchNN import (
 	DynamicWeightedIntermittentSalesMLP,
 )
 
-class BaseModel(ABC):
-	@abstractmethod
-	def forward(self, features):
-		pass
-
-	@abstractmethod
-	def compute_loss(self, logits, targets):
-		pass
-
-	@abstractmethod
-	def initialize_weights(self):
-		pass
-
-	@abstractmethod
-	def predict_proba(self, features):
-		pass
-
-	@abstractmethod
-	def predict(self, features, threshold=0.5):
-		pass
 def compute_metrics(y_true, y_pred):
 	y_true = y_true.astype(np.int32)
 	y_pred = y_pred.astype(np.int32)
@@ -181,7 +160,6 @@ def train_model(
 	for epoch in range(1, epochs + 1):
 		epoch_loss = 0.0
 		for batch_features, batch_target in get_batches(x_train, y_train, batch_size):
-			optimizer.zero_grad()
 			logits = model(batch_features)
 			loss_val, loss_grad = model.compute_loss(logits, batch_target)
 			model.network.backward(loss_grad.T)

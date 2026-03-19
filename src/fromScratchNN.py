@@ -1,7 +1,11 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-# --- Core Neural Network Components ---
+def stable_sigmoid(x):
+    return np.where(x >= 0, 
+                    1 / (1 + np.exp(-x)), 
+                    np.exp(x) / (1 + np.exp(x)))
+
 
 class PerceptronLayer:
     def __init__(self, arg1, arg2, transfer_func="relu"):
@@ -9,7 +13,7 @@ class PerceptronLayer:
             self.inputs = arg1
             self.outputs = arg2
 
-            # He Initialization for ReLU, Xavier for Linear/Sigmoid
+            # He Initialization for ReLU and Xavier for Linear
             if transfer_func == "relu":
                 std_dev = np.sqrt(2.0 / self.inputs)
             else:
@@ -38,7 +42,7 @@ class PerceptronLayer:
             return n
 
     def forward(self, p):
-        # p is expected to be [features, batch_size]
+        # p is [features, batch_size]
         p = np.array(p)
         if p.ndim == 1:
             p = p.reshape(-1, 1)
@@ -60,11 +64,10 @@ class PerceptronLayer:
         # For batch processing, we ensure correct dimensions
         delta = d_out * self._activation_derivative(self.z)
         
-        # Gradient with respect to weights and biases, sum over batch
-        self.weight_grad = np.dot(delta, self.last_input.T)
-        self.bias_grad = np.sum(delta, axis=1, keepdims=True)
+        # Gradient 
+        self.weight_grad[:] = np.dot(delta, self.last_input.T)
+        self.bias_grad[:] = np.sum(delta, axis=1, keepdims=True)
         
-        # Gradient for previous layer
         d_prev = np.dot(self.weights.T, delta)
         return d_prev
 
@@ -92,13 +95,10 @@ class NeuralNetwork:
     def get_parameters(self):
         params = []
         for layer in self.layers:
-            # Append tuple of (value_array, gradient_array)
-            # The optimizer will modify value_array in-place
             params.append((layer.weights, layer.weight_grad))
             params.append((layer.bias, layer.bias_grad))
         return params
 
-# --- Custom Optimizer ---
 
 class AdamOptimizer:
     def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
@@ -111,31 +111,25 @@ class AdamOptimizer:
         self.m = [np.zeros_like(p[0]) for p in self.parameters]
         self.v = [np.zeros_like(p[0]) for p in self.parameters]
 
-    def zero_grad(self):
-        # Gradients are overwritten directly in layer.backward via assignment
-        pass 
-
     def step(self):
         self.t += 1
         for i, (param, grad) in enumerate(self.parameters):
-            self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * grad
-            self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * (grad ** 2)
+            clipped_grad = np.clip(grad, -1.0, 1.0)
+            
+            self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * clipped_grad
+            self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * (clipped_grad ** 2)
 
             m_hat = self.m[i] / (1 - self.beta1 ** self.t)
             v_hat = self.v[i] / (1 - self.beta2 ** self.t)
 
-            # In-place update
             param -= self.lr * m_hat / (np.sqrt(v_hat) + self.epsilon)
 
-# --- Faux Tensor and DataLoader ---
 
 class BaseModel(ABC):
     @abstractmethod
     def forward(self, features): pass
     @abstractmethod
     def compute_loss(self, logits, targets): pass
-    @abstractmethod
-    def initialize_weights(self): pass
     @abstractmethod
     def predict_proba(self, features): pass
     @abstractmethod
@@ -156,33 +150,26 @@ class IntermittentSalesMLP(BaseModel):
 
     def forward(self, features):
         x = np.array(features)
-        # The input batch size is x.shape[0]
-        # Neural network expects [features, batch_size]
         x_t = x.T
         out_t = self.network.forward(x_t)
-        # Produce output of shape [batch_size, 1]
         return out_t.T
 
     def compute_loss(self, logits, targets):
         logits_np = np.array(logits)
         targets_np = np.array(targets)
 
-        # PyTorch BCEWithLogitsLoss logic
         loss_val = np.mean(np.maximum(logits_np, 0) - logits_np * targets_np + np.log(1 + np.exp(-np.abs(logits_np))))
         
-        # Derivative w.r.t logits for mean reduction
-        sig = 1 / (1 + np.exp(-logits_np))
+        # Derivative 
+        sig = stable_sigmoid(logits_np)
         loss_grad = (sig - targets_np) / len(targets_np)
         
         return loss_val, loss_grad
 
-    def initialize_weights(self):
-        pass # Initialization handled accurately inside PerceptronLayer init
-
     def predict_proba(self, features):
         logits = self.forward(features)
         logits_squeeze = np.squeeze(logits, axis=1) # [batch]
-        return 1 / (1 + np.exp(-logits_squeeze))
+        return stable_sigmoid(logits_squeeze)
 
     def predict(self, features, threshold=0.5):
         probabilities = self.predict_proba(features)
@@ -198,7 +185,7 @@ class WeightedIntermittentSalesMLP(IntermittentSalesMLP):
         logits_np = np.array(logits)
         targets_np = np.array(targets)
 
-        sig = 1 / (1 + np.exp(-logits_np))
+        sig = stable_sigmoid(logits_np)
         sig = np.clip(sig, 1e-15, 1 - 1e-15)
         loss_val = np.mean(-self.pos_weight * targets_np * np.log(sig) - (1 - targets_np) * np.log(1 - sig))
 
@@ -217,12 +204,12 @@ class WAPEIntermittentSalesMLP(IntermittentSalesMLP):
         logits_np = np.array(logits)
         targets_np = np.array(targets)
 
-        predictions = 1 / (1 + np.exp(-logits_np))
+        predictions = stable_sigmoid(logits_np)
         numerator = np.sum(np.abs(targets_np - predictions))
         denominator = np.maximum(np.sum(np.abs(targets_np)), 1e-6)
         loss_val = float(numerator / denominator)
 
-        # Derivative (Note: no len(targets) scaling needed as denominator is already across batch sum)
+        # Derivative
         grad_p_i = np.where(predictions > targets_np, 1.0, -1.0) / denominator
         loss_grad = grad_p_i * predictions * (1 - predictions)
 
