@@ -320,7 +320,7 @@ def main():
 	train_data_path = output_dir / "intermittent_train_data.csv"
 	validate_data_path = output_dir / "intermittent_validate_data.csv"
 	evaluate_data_path = output_dir / "intermittent_evaluate_data.csv"
-	max_rows = 10000000
+	max_rows = 1000000
 	epochs = 10
 	batch_size = 2048
 	learning_rate = 1e-3
